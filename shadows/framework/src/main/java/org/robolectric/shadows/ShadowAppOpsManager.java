@@ -20,6 +20,7 @@ import android.app.AppOpsManager.OnOpChangedListener;
 import android.app.AppOpsManager.OpEntry;
 import android.app.AppOpsManager.OpEventProxyInfo;
 import android.app.AppOpsManager.PackageOps;
+import android.content.AttributionSource;
 import android.content.Context;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.media.AudioAttributes.AttributeUsage;
@@ -365,7 +366,7 @@ public class ShadowAppOpsManager {
     return checkOpNoThrow(op, proxiedUid, proxiedPackageName);
   }
 
-  @Implementation(minSdk = R)
+  @Implementation(minSdk = R, maxSdk = R)
   @HiddenApi
   protected int noteProxyOpNoThrow(
       int op,
@@ -375,6 +376,20 @@ public class ShadowAppOpsManager {
       String message) {
     storedOps.put(Key.create(proxiedUid, proxiedPackageName, null), op);
     return checkOpNoThrow(op, proxiedUid, proxiedPackageName);
+  }
+
+  @Implementation(minSdk = Build.VERSION_CODES.S)
+  protected int noteProxyOpNoThrow(
+      int op,
+      AttributionSource attributionSource,
+      String message,
+      boolean ignoredSkipProxyOperation) {
+    return noteProxyOpNoThrow(
+        op,
+        attributionSource.getNextPackageName(),
+        attributionSource.getNextUid(),
+        attributionSource.getNextAttributionTag(),
+        message);
   }
 
   @Implementation(minSdk = KITKAT)
