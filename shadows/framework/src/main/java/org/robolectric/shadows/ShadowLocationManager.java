@@ -4,7 +4,6 @@ import static android.location.LocationManager.GPS_PROVIDER;
 import static android.location.LocationManager.NETWORK_PROVIDER;
 import static android.location.LocationManager.PASSIVE_PROVIDER;
 import static android.os.Build.VERSION_CODES.KITKAT;
-import static android.os.Build.VERSION_CODES.LOLLIPOP;
 import static android.os.Build.VERSION_CODES.N;
 import static android.os.Build.VERSION_CODES.P;
 import static android.os.Build.VERSION_CODES.Q;
@@ -47,15 +46,16 @@ import java.lang.reflect.Constructor;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
@@ -590,7 +590,7 @@ public class ShadowLocationManager {
         bestProvider, new LocationRequest(minTime, minDistance), pendingIntent);
   }
 
-  @Implementation(minSdk = LOLLIPOP)
+  @Implementation(minSdk = KITKAT)
   protected void requestLocationUpdates(
       @Nullable Object request, Object executorOrListener, Object listenerOrLooper) {
     if (request == null) {
@@ -618,7 +618,7 @@ public class ShadowLocationManager {
     }
   }
 
-  @Implementation(minSdk = LOLLIPOP)
+  @Implementation(minSdk = KITKAT)
   protected void requestLocationUpdates(@Nullable Object request, Object pendingIntent) {
     if (request == null) {
       request = new android.location.LocationRequest();
@@ -895,12 +895,15 @@ public class ShadowLocationManager {
     synchronized (providers) {
       HashSet<LocationListener> listeners = new HashSet<>();
       for (ProviderEntry providerEntry : providers) {
-        for (ProviderEntry.ListenerEntry listenerEntry : providerEntry.listeners) {
-          LocationTransport transport = listenerEntry.transport;
-          if (transport instanceof ListenerTransport) {
-            listeners.add(((ListenerTransport) transport).locationListener);
-          }
-        }
+        listeners.addAll(
+            providerEntry.mapListeners(
+                entry -> {
+                  if (entry.key instanceof LocationListener) {
+                    return (LocationListener) entry.key;
+                  } else {
+                    return null;
+                  }
+                }));
       }
       return new ArrayList<>(listeners);
     }
@@ -919,14 +922,14 @@ public class ShadowLocationManager {
       return Collections.emptyList();
     }
 
-    ArrayList<LocationListener> listeners = new ArrayList<>(providerEntry.listeners.size());
-    for (ProviderEntry.ListenerEntry listenerEntry : providerEntry.listeners) {
-      LocationTransport transport = listenerEntry.transport;
-      if (transport instanceof ListenerTransport) {
-        listeners.add(((ListenerTransport) transport).locationListener);
-      }
-    }
-    return listeners;
+    return providerEntry.mapListeners(
+        entry -> {
+          if (entry.key instanceof LocationListener) {
+            return (LocationListener) entry.key;
+          } else {
+            return null;
+          }
+        });
   }
 
   /**
@@ -938,16 +941,19 @@ public class ShadowLocationManager {
   @Deprecated
   public List<PendingIntent> getLocationUpdatePendingIntents() {
     synchronized (providers) {
-      HashSet<PendingIntent> pendingIntents = new HashSet<>();
+      HashSet<PendingIntent> listeners = new HashSet<>();
       for (ProviderEntry providerEntry : providers) {
-        for (ProviderEntry.ListenerEntry listenerEntry : providerEntry.listeners) {
-          LocationTransport transport = listenerEntry.transport;
-          if (transport instanceof PendingIntentTransport) {
-            pendingIntents.add(((PendingIntentTransport) transport).pendingIntent);
-          }
-        }
+        listeners.addAll(
+            providerEntry.mapListeners(
+                entry -> {
+                  if (entry.key instanceof PendingIntent) {
+                    return (PendingIntent) entry.key;
+                  } else {
+                    return null;
+                  }
+                }));
       }
-      return new ArrayList<>(pendingIntents);
+      return new ArrayList<>(listeners);
     }
   }
 
@@ -964,14 +970,14 @@ public class ShadowLocationManager {
       return Collections.emptyList();
     }
 
-    ArrayList<PendingIntent> pendingIntents = new ArrayList<>(providerEntry.listeners.size());
-    for (ProviderEntry.ListenerEntry listenerEntry : providerEntry.listeners) {
-      LocationTransport transport = listenerEntry.transport;
-      if (transport instanceof PendingIntentTransport) {
-        pendingIntents.add(((PendingIntentTransport) transport).pendingIntent);
-      }
-    }
-    return pendingIntents;
+    return providerEntry.mapListeners(
+        entry -> {
+          if (entry.key instanceof PendingIntent) {
+            return (PendingIntent) entry.key;
+          } else {
+            return null;
+          }
+        });
   }
 
   private Context getContext() {
@@ -1045,7 +1051,9 @@ public class ShadowLocationManager {
   //    programmatically, and should never be determined by LOCATION_PROVIDERS_ALLOWED.
   private final class ProviderEntry {
     private final String name;
-    private final CopyOnWriteArraySet<ListenerEntry> listeners;
+
+    @GuardedBy("listeners")
+    private final Map<Object, ListenerEntry> listeners;
 
     @Nullable private volatile ProviderProperties properties;
     private boolean enabled;
@@ -1053,7 +1061,8 @@ public class ShadowLocationManager {
 
     private ProviderEntry(String name, @Nullable ProviderProperties properties) {
       this.name = name;
-      listeners = new CopyOnWriteArraySet<>();
+      listeners = new HashMap<>();
+
       this.properties = properties;
 
       switch (name) {
@@ -1176,8 +1185,7 @@ public class ShadowLocationManager {
             getContext().getContentResolver(), name, enabled);
       }
 
-      // fire listeners
-      for (ProviderEntry.ListenerEntry listener : listeners) {
+      for (ListenerEntry listener : copyListeners()) {
         listener.invokeOnProviderEnabled(name, enabled);
       }
     }
@@ -1185,8 +1193,27 @@ public class ShadowLocationManager {
     public void simulateLocation(Location location) {
       lastLocation = new Location(location);
 
-      for (ListenerEntry listenerEntry : listeners) {
-        listenerEntry.simulateLocation(location);
+      for (ListenerEntry listener : copyListeners()) {
+        listener.invokeOnLocation(location);
+      }
+    }
+
+    public List<ListenerEntry> copyListeners() {
+      synchronized (listeners) {
+        return new ArrayList<>(listeners.values());
+      }
+    }
+
+    public <T> List<T> mapListeners(Function<ListenerEntry, T> function) {
+      synchronized (listeners) {
+        ArrayList<T> list = new ArrayList<>(listeners.size());
+        for (ListenerEntry entry : listeners.values()) {
+          T item = function.apply(entry);
+          if (item != null) {
+            list.add(item);
+          }
+        }
+        return list;
       }
     }
 
@@ -1224,28 +1251,31 @@ public class ShadowLocationManager {
         LocationListener listener,
         ShadowLocationManager.LocationRequest request,
         Executor executor) {
-      add(new ListenerEntry(listener, request, new ListenerTransport(executor, listener)));
+      addListener(
+          listener,
+          new ListenerEntry(listener, request, new ListenerTransport(executor, listener)));
     }
 
     public void addListener(
         PendingIntent pendingIntent, ShadowLocationManager.LocationRequest request) {
-      add(
+      addListener(
+          pendingIntent,
           new ListenerEntry(
               pendingIntent, request, new PendingIntentTransport(pendingIntent, getContext())));
     }
 
-    private void add(ListenerEntry entry) {
+    private void addListener(Object key, ListenerEntry entry) {
+      synchronized (listeners) {
+        listeners.put(key, entry);
+      }
       if (!enabled) {
         entry.invokeOnProviderEnabled(name, false);
       }
-      listeners.add(entry);
     }
 
     public void removeListener(Object key) {
-      for (ListenerEntry listenerEntry : listeners) {
-        if (listenerEntry.key == key) {
-          listeners.remove(listenerEntry);
-        }
+      synchronized (listeners) {
+        listeners.remove(key);
       }
     }
 
@@ -1286,7 +1316,7 @@ public class ShadowLocationManager {
         this.transport = transport;
       }
 
-      public void simulateLocation(Location location) {
+      public void invokeOnLocation(Location location) {
         if (lastDeliveredLocation != null) {
           if (location.getTime() - lastDeliveredLocation.getTime()
               < request.minUpdateIntervalMillis) {
@@ -1300,13 +1330,21 @@ public class ShadowLocationManager {
         lastDeliveredLocation = new Location(location);
 
         if (++numDeliveries >= request.maxUpdates) {
-          listeners.remove(this);
+          synchronized (listeners) {
+            listeners.remove(key, this);
+          }
         }
 
         try {
           transport.onLocation(location);
         } catch (Exception e) {
-          removeListener(key);
+          if (e instanceof RuntimeException) {
+            throw (RuntimeException) e;
+          } else {
+            synchronized (listeners) {
+              listeners.remove(key, this);
+            }
+          }
         }
       }
 
@@ -1314,25 +1352,14 @@ public class ShadowLocationManager {
         try {
           transport.onProviderEnabled(provider, enabled);
         } catch (Exception e) {
-          removeListener(key);
+          if (e instanceof RuntimeException) {
+            throw (RuntimeException) e;
+          } else {
+            synchronized (listeners) {
+              listeners.remove(key, this);
+            }
+          }
         }
-      }
-
-      @Override
-      public boolean equals(Object o) {
-        if (this == o) {
-          return true;
-        }
-        if (!(o instanceof ListenerEntry)) {
-          return false;
-        }
-        ListenerEntry that = (ListenerEntry) o;
-        return key == that.key;
-      }
-
-      @Override
-      public int hashCode() {
-        return Objects.hashCode(key);
       }
     }
   }
