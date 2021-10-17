@@ -3,6 +3,9 @@ package org.robolectric.shadows;
 import static android.os.Build.VERSION_CODES.LOLLIPOP;
 import static android.os.Build.VERSION_CODES.P;
 
+import android.graphics.Camera;
+import android.graphics.Matrix;
+import android.graphics.Rect;
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
 
@@ -28,6 +31,10 @@ public class ShadowRenderNode {
   private float translationX;
   private float translationY;
   private float translationZ;
+  private int left;
+  private int top;
+  private int right;
+  private int bottom;
 
   @Implementation
   public boolean setAlpha(float alpha) {
@@ -178,6 +185,14 @@ public class ShadowRenderNode {
   }
 
   @Implementation
+  public boolean resetPivot() {
+    this.pivotExplicitlySet = false;
+    this.pivotX = 0;
+    this.pivotY = 0;
+    return true;
+  }
+
+  @Implementation
   public boolean setPivotX(float pivotX) {
     this.pivotX = pivotX;
     this.pivotExplicitlySet = true;
@@ -199,6 +214,135 @@ public class ShadowRenderNode {
   @Implementation
   public float getPivotY() {
     return pivotY;
+  }
+
+  @Implementation
+  public boolean setLeft(int left) {
+    this.left = left;
+    return true;
+  }
+
+  @Implementation
+  public int getLeft() {
+    return left;
+  }
+
+  @Implementation
+  public boolean setTop(int top) {
+    this.top = top;
+    return true;
+  }
+
+  @Implementation
+  public int getTop() {
+    return top;
+  }
+
+  @Implementation
+  public boolean setRight(int right) {
+    this.right = right;
+    return true;
+  }
+
+  @Implementation
+  public int getRight() {
+    return right;
+  }
+
+  @Implementation
+  public boolean setBottom(int bottom) {
+    this.bottom = bottom;
+    return true;
+  }
+
+  @Implementation
+  public int getBottom() {
+    return bottom;
+  }
+
+  @Implementation
+  public int getWidth() {
+    return right - left;
+  }
+
+  @Implementation
+  public int getHeight() {
+    return bottom - top;
+  }
+
+  @Implementation
+  public boolean setLeftTopRightBottom(int left, int top, int right, int bottom) {
+    return setPosition(left, top, right, bottom);
+  }
+
+  @Implementation
+  public boolean setPosition(int left, int top, int right, int bottom) {
+    this.left = left;
+    this.top = top;
+    this.right = right;
+    this.bottom = bottom;
+    return true;
+  }
+
+  @Implementation
+  public boolean setPosition(Rect position) {
+    this.left = position.left;
+    this.top = position.top;
+    this.right = position.right;
+    this.bottom = position.bottom;
+    return true;
+  }
+
+  @Implementation
+  public boolean offsetLeftAndRight(int offset) {
+    this.left += offset;
+    this.right += offset;
+    return true;
+  }
+
+  @Implementation
+  public boolean offsetTopAndBottom(int offset) {
+    this.top += offset;
+    this.bottom += offset;
+    return true;
+  }
+
+  @Implementation
+  public void getInverseMatrix(Matrix matrix) {
+    getMatrix(matrix);
+    matrix.invert(matrix);
+  }
+
+  @Implementation
+  public void getMatrix(Matrix matrix) {
+    if (!pivotExplicitlySet) {
+      pivotX = getWidth() / 2f;
+      pivotY = getHeight() / 2f;
+    }
+    matrix.reset();
+    if (rotationX == 0 && rotationY == 0) {
+      matrix.setTranslate(translationX, translationY);
+      matrix.preRotate(rotation, pivotX, pivotY);
+      matrix.postScale(scaleX, scaleY, pivotX, pivotY);
+    } else {
+      matrix.preScale(scaleX, scaleY, pivotX, pivotY);
+      Camera camera = new Camera();
+      camera.rotateX(rotationX);
+      camera.rotateY(rotationY);
+      camera.rotateZ(-rotation);
+      Matrix transform = new Matrix();
+      camera.getMatrix(transform);
+      transform.preTranslate(-pivotX, -pivotY);
+      transform.postTranslate(pivotX + translationX, pivotY + translationY);
+      matrix.postConcat(transform);
+    }
+  }
+
+  @Implementation
+  public boolean hasIdentityMatrix() {
+    Matrix matrix = new Matrix();
+    getMatrix(matrix);
+    return matrix.isIdentity();
   }
 
   @Implementation
