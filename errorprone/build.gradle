@@ -39,7 +39,8 @@ dependencies {
     testImplementation "junit:junit:${junitVersion}"
     testImplementation "com.google.truth:truth:${truthVersion}"
     testImplementation("com.google.errorprone:error_prone_test_helpers:${errorproneVersion}") {
-        exclude group: 'junit', module: 'junit' // because it depends on a snapshot!?
+        exclude group: 'junit'
+        exclude module: 'junit' // because it depends on a snapshot!?
     }
     testCompileOnly(AndroidSdk.MAX_SDK.coordinates) { force = true }
 }
